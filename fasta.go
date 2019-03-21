@@ -5,11 +5,146 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
 const INVB byte = '\x7F'
 const INVR rune = rune(INVB)
+
+type LISTADDSTATUS byte
+
+const LISTADDOK LISTADDSTATUS = 0
+const LISTADDFULL LISTADDSTATUS = 1
+
+type Unit struct {
+	seq   uint64
+	count uint16
+}
+
+type unitSlice []Unit
+type UnitList struct {
+	units    unitSlice
+	count    uint64
+	total    uint64
+	min      uint64
+	max      uint64
+	blockMin uint64
+	blockMax uint64
+}
+
+type unitGroupPointer []*UnitList
+type unitGroup []UnitList
+type UnitListDb struct {
+	lists     unitGroupPointer
+	repo      unitGroup
+	count     uint64
+	min       uint64
+	max       uint64
+	blockMin  uint64
+	blockMax  uint64
+	blockSize uint64 //TODO: make dynamic
+	blockNum  uint64
+}
+
+func (units *unitSlice) Append(unit Unit) {
+	(*units) = append((*units), unit)
+}
+
+func (units *unitSlice) Sort() {
+	sort.Slice((*units)[:], func(i, j int) bool {
+		return (*units)[i].seq < (*units)[j].seq
+	})
+}
+
+func (list *UnitList) Add(seq uint64) LISTADDSTATUS {
+	if seq >= list.min {
+		for pos, unit := range list.units {
+			// TODO: BINARY SEARCH
+			if seq == unit.seq {
+				list.units[pos].count += 1
+				list.count += 1
+				return LISTADDOK
+			} else if seq > unit.seq {
+				break
+			}
+		}
+	}
+
+	if seq < list.min {
+		list.min = seq
+	}
+
+	if seq > list.max {
+		list.max = seq
+	}
+
+	list.count += 1
+	list.total += 1
+	list.units.Append(Unit{seq, 1})
+	list.units.Sort()
+
+	// TODO: SPLIT IF TOO LARGE
+	if list.blockMin > list.blockMax {
+		return LISTADDFULL
+	} else {
+		return LISTADDOK
+	}
+}
+
+func (list *unitGroupPointer) Sort() {
+	sort.Slice((*list)[:], func(i, j int) bool {
+		return (*list)[i].blockMin < (*list)[j].blockMin
+	})
+}
+
+func (list *unitGroupPointer) Append(repo *unitGroup) {
+	*list = append(*list, &(*repo)[len(*repo)-1])
+}
+
+func (db *UnitListDb) Create(seq uint64) {
+	if seq > db.max {
+		db.max = seq
+	}
+
+	if seq < db.min {
+		db.min = seq
+	}
+
+	// blockSize uint64 //TODO: make dynamic
+	// blockNum  uint64
+
+	// TODO: CREATE
+	//  Calculate blocks
+	//    update list
+	//    update db
+	// TODO: SPLIT IF TOO LARGE
+
+	newul := UnitList{}
+	db.repo = append(db.repo, newul)
+	db.lists.Append(&db.repo)
+	db.lists.Sort()
+}
+
+func (db *UnitListDb) Add(seq uint64) {
+	if seq < db.blockMin || seq > db.blockMax {
+		db.Create(seq)
+
+	} else {
+		for pos, list := range db.lists {
+			// TODO: BINARY SEARCH
+			if seq >= list.blockMin {
+				if seq <= list.blockMax {
+					db.lists[pos].Add(seq)
+					return
+				} else {
+					break
+				}
+			}
+		}
+		db.Create(seq)
+	}
+}
 
 func main() {
 	filename := "S_lycopersicum_chromosomes.2.50.fa"
